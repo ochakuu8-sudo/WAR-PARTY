@@ -138,6 +138,7 @@ class GameServer {
 
     getState() {
         return {
+            t: Date.now(),
             players: this.players,
             bullets: this.bullets,
             scores: this.scores,

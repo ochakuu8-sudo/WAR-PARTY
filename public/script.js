@@ -80,7 +80,7 @@ function connectSocket() {
     const isDiscord = window.location.hostname.includes('discordsays.com');
     const url = isDiscord ? `wss://${window.location.hostname}` : window.location.origin;
     const path = isDiscord ? '/.proxy/socket.io/' : '/socket.io/';
-    socket = io(url, { path, transports: ['websocket', 'polling'] });
+    socket = io(url, { path, transports: ['websocket'] });
 
     socket.on('connect', () => {
         socket.emit('joinGame', { name: playerName });
@@ -107,7 +107,17 @@ function connectSocket() {
 }
 
 // ================== SERVER STATE (just relay) ==================
+let serverTimeOffset = null;
+
 function onServerState(state) {
+    if (!state.t) return; // Wait for server to update
+
+    // Smoothly track the difference between local time and server time
+    const localNow = performance.now();
+    const currentOffset = localNow - state.t;
+    if (serverTimeOffset === null) serverTimeOffset = currentOffset;
+    else serverTimeOffset = serverTimeOffset * 0.9 + currentOffset * 0.1;
+
     allPlayers = state.players;
     scores = state.scores;
     gamePhase = state.state;
@@ -124,19 +134,19 @@ function onServerState(state) {
         me.maxHp = sp.maxHp || 100;
     }
 
-    // Buffer remote player snapshots (timestamped)
+    // Buffer remote player snapshots using exact server generation time
     for (const id in state.players) {
         if (id === myId) continue;
         const sp = state.players[id];
         remoteBuffer.push({
-            t: performance.now(),
+            t: state.t, // Server time! Immune to network jitter.
             x: sp.x, y: sp.y,
             hp: sp.hp, maxHp: sp.maxHp || 100,
             facingRight: sp.facingRight,
             name: sp.name, playerIndex: sp.playerIndex,
         });
         // Keep only last 1 second of data
-        const cutoff = performance.now() - 1000;
+        const cutoff = state.t - 1000;
         while (remoteBuffer.length > 2 && remoteBuffer[0].t < cutoff) remoteBuffer.shift();
         if (!remotePlayer) remotePlayer = { ...sp };
     }
@@ -231,8 +241,9 @@ function loop() {
     }
 
     // 3. Buffered entity interpolation (Source Engine style)
-    if (remotePlayer && remoteBuffer.length >= 2) {
-        const renderTime = performance.now() - RENDER_DELAY;
+    if (remotePlayer && remoteBuffer.length >= 2 && serverTimeOffset !== null) {
+        // Calculate what time it was on the SERVER exactly RENDER_DELAY ms ago
+        const renderTime = performance.now() - serverTimeOffset - RENDER_DELAY;
         // Find the two snapshots surrounding renderTime
         let from = remoteBuffer[0], to = remoteBuffer[1];
         for (let i = 0; i < remoteBuffer.length - 1; i++) {
