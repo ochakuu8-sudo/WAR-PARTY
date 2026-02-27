@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROUNDS - 1v1 Shooter</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div id="app">
+        <!-- Lobby Screen -->
+        <div id="lobby" class="screen active">
+            <div class="lobby-content">
+                <h1 class="game-title">ROUNDS</h1>
+                <p class="game-subtitle">1v1 Shooter</p>
+                <div id="playerInfo" class="player-info">
+                    <div class="avatar" id="avatar"></div>
+                    <span id="playerName">Loading...</span>
+                </div>
+                <button id="playBtn" class="play-btn" disabled>
+                    <span>CONNECTING...</span>
+                </button>
+                <p id="lobbyStatus" class="lobby-status"></p>
+            </div>
+        </div>
+
+        <!-- Game Screen -->
+        <div id="gameScreen" class="screen">
+            <div id="hud" class="hud">
+                <div class="hud-player hud-left">
+                    <div class="hud-name" id="hudName1">Player 1</div>
+                    <div class="hud-hp-bar">
+                        <div class="hud-hp-fill" id="hudHp1"></div>
+                    </div>
+                    <div class="hud-score" id="hudScore1">0</div>
+                </div>
+                <div class="hud-center">
+                    <div id="roundText" class="round-text"></div>
+                </div>
+                <div class="hud-player hud-right">
+                    <div class="hud-name" id="hudName2">Player 2</div>
+                    <div class="hud-hp-bar">
+                        <div class="hud-hp-fill hud-hp-red" id="hudHp2"></div>
+                    </div>
+                    <div class="hud-score" id="hudScore2">0</div>
+                </div>
+            </div>
+            <div id="gameContainer"></div>
+            <div id="gameOverlay" class="game-overlay hidden">
+                <h2 id="overlayText"></h2>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="script.js"></script>
+</body>
+
+</html>
