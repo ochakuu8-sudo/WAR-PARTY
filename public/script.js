@@ -32,7 +32,7 @@ let me = null;
 // Remote player (buffered entity interpolation - Source Engine style)
 let remotePlayer = null;
 let remoteBuffer = []; // [{t, x, y, hp, maxHp, facingRight, name, playerIndex}, ...]
-const RENDER_DELAY = 66; // ms - render remote player 66ms in the past for smoothness
+const RENDER_DELAY = 40; // ms - render remote player 40ms in the past for smoothness
 // Server data
 let serverBullets = [];
 let scores = {};
@@ -172,7 +172,7 @@ function initGame(state) {
 
 let lastFrame = 0;
 let lastSendTime = 0;
-const SEND_INTERVAL = 1000 / 20; // Send position at 20fps (every 50ms)
+const SEND_INTERVAL = 1000 / 40; // Send position at 40fps (every 25ms)
 let localBullets = []; // Client-predicted bullets for instant feedback
 let localBulletId = 0;
 
