@@ -29,8 +29,10 @@ let input = { left: false, right: false, jump: false, shoot: false, mouseX: 400,
 
 // Local player (fully client-controlled)
 let me = null;
-// Remote player (from server)
-let remotePrev = null, remoteTarget = null, remotePlayer = null, interpT = 0;
+// Remote player (buffered entity interpolation - Source Engine style)
+let remotePlayer = null;
+let remoteBuffer = []; // [{t, x, y, hp, maxHp, facingRight, name, playerIndex}, ...]
+const RENDER_DELAY = 66; // ms - render remote player 66ms in the past for smoothness
 // Server data
 let serverBullets = [];
 let scores = {};
@@ -115,24 +117,27 @@ function onServerState(state) {
     // Update my HP from server (damage is server-authoritative)
     if (me && allPlayers[myId]) {
         const sp = allPlayers[myId];
-        // Respawn: server resets HP and position
         if (me.hp <= 0 && sp.hp > 0) {
-            me.x = sp.x;
-            me.y = sp.y;
-            me.vx = 0;
-            me.vy = 0;
+            me.x = sp.x; me.y = sp.y; me.vx = 0; me.vy = 0;
         }
         me.hp = sp.hp;
         me.maxHp = sp.maxHp || 100;
     }
 
-    // Update remote player
+    // Buffer remote player snapshots (timestamped)
     for (const id in state.players) {
         if (id === myId) continue;
         const sp = state.players[id];
-        remotePrev = remoteTarget ? { ...remoteTarget } : { ...sp };
-        remoteTarget = { ...sp };
-        interpT = 0;
+        remoteBuffer.push({
+            t: performance.now(),
+            x: sp.x, y: sp.y,
+            hp: sp.hp, maxHp: sp.maxHp || 100,
+            facingRight: sp.facingRight,
+            name: sp.name, playerIndex: sp.playerIndex,
+        });
+        // Keep only last 1 second of data
+        const cutoff = performance.now() - 1000;
+        while (remoteBuffer.length > 2 && remoteBuffer[0].t < cutoff) remoteBuffer.shift();
         if (!remotePlayer) remotePlayer = { ...sp };
     }
 
@@ -225,16 +230,32 @@ function loop() {
         }
     }
 
-    // 3. Interpolate + extrapolate remote player
-    if (remotePlayer && remotePrev && remoteTarget) {
-        interpT = Math.min(1.2, interpT + 0.35 * dt); // Allow slight extrapolation past 1.0
-        remotePlayer.x = lerp(remotePrev.x, remoteTarget.x, interpT);
-        remotePlayer.y = lerp(remotePrev.y, remoteTarget.y, interpT);
-        remotePlayer.hp = remoteTarget.hp;
-        remotePlayer.maxHp = remoteTarget.maxHp || 100;
-        remotePlayer.facingRight = remoteTarget.facingRight;
-        remotePlayer.name = remoteTarget.name;
-        remotePlayer.playerIndex = remoteTarget.playerIndex;
+    // 3. Buffered entity interpolation (Source Engine style)
+    if (remotePlayer && remoteBuffer.length >= 2) {
+        const renderTime = performance.now() - RENDER_DELAY;
+        // Find the two snapshots surrounding renderTime
+        let from = remoteBuffer[0], to = remoteBuffer[1];
+        for (let i = 0; i < remoteBuffer.length - 1; i++) {
+            if (remoteBuffer[i].t <= renderTime && remoteBuffer[i + 1].t >= renderTime) {
+                from = remoteBuffer[i];
+                to = remoteBuffer[i + 1];
+                break;
+            }
+        }
+        // If renderTime is past all snapshots, use the latest
+        if (renderTime > remoteBuffer[remoteBuffer.length - 1].t) {
+            from = remoteBuffer[remoteBuffer.length - 2] || remoteBuffer[0];
+            to = remoteBuffer[remoteBuffer.length - 1];
+        }
+        const range = to.t - from.t;
+        const t = range > 0 ? Math.max(0, Math.min(1, (renderTime - from.t) / range)) : 1;
+        remotePlayer.x = lerp(from.x, to.x, t);
+        remotePlayer.y = lerp(from.y, to.y, t);
+        remotePlayer.hp = to.hp;
+        remotePlayer.maxHp = to.maxHp;
+        remotePlayer.facingRight = to.facingRight;
+        remotePlayer.name = to.name;
+        remotePlayer.playerIndex = to.playerIndex;
     }
 
     // 3. Render
