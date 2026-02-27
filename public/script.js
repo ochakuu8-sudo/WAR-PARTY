@@ -115,22 +115,38 @@ function onServerState(state) {
     localScores = state.scores;
     localGameState = state.state;
     localLoserId = state.loserId;
-    localBullets = state.bullets || [];
+
+    // Client-side bullet interpolation: store velocity so we can simulate between updates
+    const newBullets = state.bullets || [];
+    localBullets = newBullets.map(b => {
+        return { ...b }; // includes vx, vy from server
+    });
 
     const ids = Object.keys(state.players);
     for (const id of ids) {
         const sp = state.players[id];
         if (id === myId) {
             if (localPlayer) {
-                // NEVER correct position - client is fully trusted for own movement
-                // Only snap on respawn (when HP resets to max after being 0)
+                // Respawn snap
                 if (localPlayer.hp <= 0 && sp.hp > 0) {
                     localPlayer.x = sp.x;
                     localPlayer.y = sp.y;
                     localPlayer.vx = 0;
                     localPlayer.vy = 0;
+                } else {
+                    // Gentle reconciliation - keeps both players in sync
+                    const dx = sp.x - localPlayer.x;
+                    const dy = sp.y - localPlayer.y;
+                    if (Math.abs(dx) > 80 || Math.abs(dy) > 80) {
+                        // Large desync = snap
+                        localPlayer.x = sp.x;
+                        localPlayer.y = sp.y;
+                    } else if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                        // Small desync = blend 5%
+                        localPlayer.x += dx * 0.05;
+                        localPlayer.y += dy * 0.05;
+                    }
                 }
-                // Only sync non-positional data from server
                 localPlayer.hp = sp.hp;
                 localPlayer.maxHp = sp.maxHp || 100;
             } else {
@@ -171,12 +187,12 @@ function initGame(state) {
 }
 
 let lastFrameTime = 0;
-const INTERP_SPEED = 1 / 3; // reach target in ~3 frames (at 20fps server = 50ms between updates, 60fps client)
+const INTERP_SPEED = 1 / 2; // reach target in ~2 client frames per server frame (30fps server, 60fps client)
 
 // ================== GAME LOOP (60fps client) ==================
 function renderLoop() {
     const now = performance.now();
-    const dt = Math.min((now - lastFrameTime) / 16.67, 2); // normalized to 60fps frame
+    const dt = Math.min((now - lastFrameTime) / 16.67, 2);
     lastFrameTime = now;
 
     // 1. Client-side prediction (own player)
@@ -196,10 +212,16 @@ function renderLoop() {
         remotePlayer.playerIndex = remoteTarget.playerIndex;
     }
 
-    // 3. Render
+    // 3. Simulate bullets client-side (smooth movement between server updates)
+    for (const b of localBullets) {
+        b.x += (b.vx || 0) * dt;
+        b.y += (b.vy || 0) * dt;
+    }
+
+    // 4. Render
     render();
 
-    // 4. Send input (every frame for responsiveness)
+    // 5. Send input
     sendInput();
 
     animFrameId = requestAnimationFrame(renderLoop);

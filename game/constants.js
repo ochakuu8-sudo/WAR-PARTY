@@ -19,7 +19,7 @@ module.exports = {
     FIRE_RATE: 300, // ms between shots
 
     // Game
-    TICK_RATE: 20, // server network updates per second (client renders at 60fps)
+    TICK_RATE: 30, // server network updates per second
     ROUNDS_TO_WIN: 5,
     RESPAWN_DELAY: 1500, // ms
 
