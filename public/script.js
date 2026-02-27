@@ -156,14 +156,20 @@ function initGame(state) {
     const myData = state.players[myId];
     me = { ...myData };
     me.grounded = false;
+    me.lastShot = 0;
 
     setupInput();
     onServerState(state);
     lastFrame = performance.now();
+    lastSendTime = 0;
     loop();
 }
 
 let lastFrame = 0;
+let lastSendTime = 0;
+const SEND_INTERVAL = 1000 / 20; // Send position at 20fps (every 50ms)
+let localBullets = []; // Client-predicted bullets for instant feedback
+let localBulletId = 0;
 
 // ================== GAME LOOP ==================
 function loop() {
@@ -174,20 +180,54 @@ function loop() {
     // 1. My physics (fully local - zero lag)
     if (me && gamePhase === 'playing') {
         runPhysics(dt);
-        // Send my position to server
-        socket.emit('playerUpdate', {
-            x: me.x, y: me.y,
-            vx: me.vx, vy: me.vy,
-            facingRight: me.facingRight,
-            shoot: input.shoot,
-            mouseX: input.mouseX,
-            mouseY: input.mouseY,
-        });
+
+        // Client-side bullet creation (instant feedback)
+        if (input.shoot && now - me.lastShot >= GC.FIRE_RATE) {
+            me.lastShot = now;
+            const cx = me.x + GC.PLAYER_WIDTH / 2;
+            const cy = me.y + GC.PLAYER_HEIGHT / 2;
+            const ddx = input.mouseX - cx;
+            const ddy = input.mouseY - cy;
+            const dist = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
+            localBullets.push({
+                id: 'local_' + (localBulletId++),
+                x: cx, y: cy,
+                vx: (ddx / dist) * GC.BULLET_SPEED,
+                vy: (ddy / dist) * GC.BULLET_SPEED,
+                radius: GC.BULLET_RADIUS,
+                ownerId: myId,
+                life: 120,
+            });
+        }
+
+        // Throttled position send (20fps)
+        if (now - lastSendTime >= SEND_INTERVAL) {
+            lastSendTime = now;
+            socket.emit('playerUpdate', {
+                x: me.x, y: me.y,
+                vx: me.vx, vy: me.vy,
+                facingRight: me.facingRight,
+                shoot: input.shoot,
+                mouseX: input.mouseX,
+                mouseY: input.mouseY,
+            });
+        }
     }
 
-    // 2. Interpolate remote player
+    // 2. Simulate local bullets
+    for (let i = localBullets.length - 1; i >= 0; i--) {
+        const b = localBullets[i];
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+        b.life--;
+        if (b.x < -20 || b.x > GC.CANVAS_WIDTH + 20 || b.y < -20 || b.y > GC.CANVAS_HEIGHT + 20 || b.life <= 0) {
+            localBullets.splice(i, 1);
+        }
+    }
+
+    // 3. Interpolate + extrapolate remote player
     if (remotePlayer && remotePrev && remoteTarget) {
-        interpT = Math.min(1, interpT + 0.5 * dt);
+        interpT = Math.min(1.2, interpT + 0.35 * dt); // Allow slight extrapolation past 1.0
         remotePlayer.x = lerp(remotePrev.x, remoteTarget.x, interpT);
         remotePlayer.y = lerp(remotePrev.y, remoteTarget.y, interpT);
         remotePlayer.hp = remoteTarget.hp;
@@ -264,8 +304,11 @@ function render() {
         if (p.h <= 20) { ctx.fillStyle = '#334155'; ctx.fillRect(p.x + 1, p.y, p.w - 2, 2); }
     }
 
-    // Bullets
-    for (const b of serverBullets) {
+    // Bullets: show local bullets (own, instant) + server bullets (opponent's)
+    // Filter server bullets to only show opponent's (avoid duplicate own bullets)
+    const opponentBullets = serverBullets.filter(b => b.ownerId !== myId);
+    const allBullets = [...localBullets, ...opponentBullets];
+    for (const b of allBullets) {
         const owner = allPlayers[b.ownerId];
         const color = owner ? (owner.playerIndex === 0 ? '#38bdf8' : '#f87171') : '#fbbf24';
         ctx.beginPath(); ctx.arc(b.x, b.y, b.radius + 4, 0, Math.PI * 2);

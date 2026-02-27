@@ -102,11 +102,11 @@ function startGameLoop(room) {
         room.updateBullets();
     }, 1000 / 60);
 
-    // Network sends at 60fps (lightweight - just relay positions)
+    // Network sends at 30fps (positions + opponent bullets)
     const sendInterval = setInterval(() => {
         if (!rooms[room.roomId] || Object.keys(room.players).length < 2) return;
         io.to(room.roomId).emit('gameState', room.getState());
-    }, 1000 / 60);
+    }, 1000 / 30);
 }
 
 const PORT = process.env.PORT || 3000;
