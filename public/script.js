@@ -17,29 +17,27 @@ const hudHp1 = document.getElementById('hudHp1');
 const hudHp2 = document.getElementById('hudHp2');
 const hudScore1 = document.getElementById('hudScore1');
 const hudScore2 = document.getElementById('hudScore2');
-const roundText = document.getElementById('roundText');
+const roundTextEl = document.getElementById('roundText');
 const gameOverlay = document.getElementById('gameOverlay');
 const overlayText = document.getElementById('overlayText');
 
 // State
-let socket = null, myId = null, myIndex = 0;
-let GC = null; // gameConstants
-let serverState = null;
+let socket = null, myId = null;
+let GC = null;
 let canvas = null, ctx = null, animFrameId = null;
-let inputState = { left: false, right: false, jump: false, shoot: false, mouseX: 400, mouseY: 250 };
+let input = { left: false, right: false, jump: false, shoot: false, mouseX: 400, mouseY: 250 };
 
-// Client-side prediction
-let localPlayer = null;   // Our player - locally simulated
-let remotePlayer = null;  // Opponent - interpolated
-let remotePrev = null;    // Previous server state for opponent
-let remoteTarget = null;  // Target server state for opponent
-let interpT = 0;          // Interpolation progress (0 to 1)
-let localBullets = [];    // Server bullets (we just render these)
-let localScores = {};
-let localGameState = 'waiting';
-let localLoserId = null;
+// Local player (fully client-controlled)
+let me = null;
+// Remote player (from server)
+let remotePrev = null, remoteTarget = null, remotePlayer = null, interpT = 0;
+// Server data
+let serverBullets = [];
+let scores = {};
+let gamePhase = 'waiting';
+let loserId = null;
+let allPlayers = {};
 
-// Physics constants (duplicated from server for client prediction)
 const GRAVITY = 0.45;
 const MAX_FALL = 12;
 
@@ -84,9 +82,9 @@ function connectSocket() {
 
     socket.on('connect', () => {
         socket.emit('joinGame', { name: playerName });
-        lobbyStatus.textContent = 'Connected! Finding opponent...';
+        lobbyStatus.textContent = 'Finding opponent...';
     });
-    socket.on('joined', (d) => { myId = d.playerId; myIndex = d.playerIndex; GC = d.constants; });
+    socket.on('joined', (d) => { myId = d.playerId; GC = d.constants; });
     socket.on('waiting', (d) => { lobbyStatus.textContent = d.message; });
     socket.on('gameStart', (state) => {
         lobbyScreen.classList.remove('active');
@@ -99,7 +97,6 @@ function connectSocket() {
         setTimeout(() => {
             gameScreen.classList.remove('active');
             lobbyScreen.classList.add('active');
-            lobbyStatus.textContent = '';
             playBtn.disabled = false;
             playBtn.querySelector('span').textContent = 'PLAY';
             if (animFrameId) cancelAnimationFrame(animFrameId);
@@ -107,62 +104,36 @@ function connectSocket() {
     });
 }
 
-// ================== SERVER STATE ==================
-let lastInputJson = '';
-
+// ================== SERVER STATE (just relay) ==================
 function onServerState(state) {
-    serverState = state;
-    localScores = state.scores;
-    localGameState = state.state;
-    localLoserId = state.loserId;
+    allPlayers = state.players;
+    scores = state.scores;
+    gamePhase = state.state;
+    loserId = state.loserId;
+    serverBullets = state.bullets || [];
 
-    // Client-side bullet interpolation: store velocity so we can simulate between updates
-    const newBullets = state.bullets || [];
-    localBullets = newBullets.map(b => {
-        return { ...b }; // includes vx, vy from server
-    });
-
-    const ids = Object.keys(state.players);
-    for (const id of ids) {
-        const sp = state.players[id];
-        if (id === myId) {
-            if (localPlayer) {
-                // Respawn snap
-                if (localPlayer.hp <= 0 && sp.hp > 0) {
-                    localPlayer.x = sp.x;
-                    localPlayer.y = sp.y;
-                    localPlayer.vx = 0;
-                    localPlayer.vy = 0;
-                } else {
-                    // Gentle reconciliation - keeps both players in sync
-                    const dx = sp.x - localPlayer.x;
-                    const dy = sp.y - localPlayer.y;
-                    if (Math.abs(dx) > 80 || Math.abs(dy) > 80) {
-                        // Large desync = snap
-                        localPlayer.x = sp.x;
-                        localPlayer.y = sp.y;
-                    } else if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
-                        // Small desync = blend 5%
-                        localPlayer.x += dx * 0.05;
-                        localPlayer.y += dy * 0.05;
-                    }
-                }
-                localPlayer.hp = sp.hp;
-                localPlayer.maxHp = sp.maxHp || 100;
-            } else {
-                localPlayer = { ...sp };
-            }
-            localPlayer.name = sp.name;
-            localPlayer.playerIndex = sp.playerIndex;
-            localPlayer.moveSpeed = sp.moveSpeed;
-            localPlayer.jumpForce = sp.jumpForce;
-        } else {
-            // Opponent: set up interpolation
-            remotePrev = remoteTarget ? { ...remoteTarget } : { ...sp };
-            remoteTarget = { ...sp };
-            interpT = 0;
-            if (!remotePlayer) remotePlayer = { ...sp };
+    // Update my HP from server (damage is server-authoritative)
+    if (me && allPlayers[myId]) {
+        const sp = allPlayers[myId];
+        // Respawn: server resets HP and position
+        if (me.hp <= 0 && sp.hp > 0) {
+            me.x = sp.x;
+            me.y = sp.y;
+            me.vx = 0;
+            me.vy = 0;
         }
+        me.hp = sp.hp;
+        me.maxHp = sp.maxHp || 100;
+    }
+
+    // Update remote player
+    for (const id in state.players) {
+        if (id === myId) continue;
+        const sp = state.players[id];
+        remotePrev = remoteTarget ? { ...remoteTarget } : { ...sp };
+        remoteTarget = { ...sp };
+        interpT = 0;
+        if (!remotePlayer) remotePlayer = { ...sp };
     }
 
     updateHUD();
@@ -180,29 +151,43 @@ function initGame(state) {
     canvas.style.height = '100%';
     container.appendChild(canvas);
     ctx = canvas.getContext('2d');
+
+    // Initialize my player from server state
+    const myData = state.players[myId];
+    me = { ...myData };
+    me.grounded = false;
+
     setupInput();
     onServerState(state);
-    lastFrameTime = performance.now();
-    renderLoop();
+    lastFrame = performance.now();
+    loop();
 }
 
-let lastFrameTime = 0;
-const INTERP_SPEED = 1 / 2; // reach target in ~2 client frames per server frame (30fps server, 60fps client)
+let lastFrame = 0;
 
-// ================== GAME LOOP (60fps client) ==================
-function renderLoop() {
+// ================== GAME LOOP ==================
+function loop() {
     const now = performance.now();
-    const dt = Math.min((now - lastFrameTime) / 16.67, 2);
-    lastFrameTime = now;
+    const dt = Math.min((now - lastFrame) / 16.67, 2);
+    lastFrame = now;
 
-    // 1. Client-side prediction (own player)
-    if (localPlayer && localGameState === 'playing') {
-        predictLocal(dt);
+    // 1. My physics (fully local - zero lag)
+    if (me && gamePhase === 'playing') {
+        runPhysics(dt);
+        // Send my position to server
+        socket.emit('playerUpdate', {
+            x: me.x, y: me.y,
+            vx: me.vx, vy: me.vy,
+            facingRight: me.facingRight,
+            shoot: input.shoot,
+            mouseX: input.mouseX,
+            mouseY: input.mouseY,
+        });
     }
 
-    // 2. Interpolate opponent
+    // 2. Interpolate remote player
     if (remotePlayer && remotePrev && remoteTarget) {
-        interpT = Math.min(1, interpT + INTERP_SPEED * dt);
+        interpT = Math.min(1, interpT + 0.5 * dt);
         remotePlayer.x = lerp(remotePrev.x, remoteTarget.x, interpT);
         remotePlayer.y = lerp(remotePrev.y, remoteTarget.y, interpT);
         remotePlayer.hp = remoteTarget.hp;
@@ -212,58 +197,41 @@ function renderLoop() {
         remotePlayer.playerIndex = remoteTarget.playerIndex;
     }
 
-    // 3. Simulate bullets client-side (smooth movement between server updates)
-    for (const b of localBullets) {
-        b.x += (b.vx || 0) * dt;
-        b.y += (b.vy || 0) * dt;
-    }
-
-    // 4. Render
+    // 3. Render
     render();
 
-    // 5. Send input
-    sendInput();
-
-    animFrameId = requestAnimationFrame(renderLoop);
+    animFrameId = requestAnimationFrame(loop);
 }
 
-function predictLocal(dt) {
-    const p = localPlayer;
-    // Apply input locally
-    p.vx = 0;
-    if (inputState.left) p.vx = -(p.moveSpeed || 4.5);
-    if (inputState.right) p.vx = (p.moveSpeed || 4.5);
+function runPhysics(dt) {
+    me.vx = 0;
+    if (input.left) me.vx = -(me.moveSpeed || GC.PLAYER_SPEED);
+    if (input.right) me.vx = (me.moveSpeed || GC.PLAYER_SPEED);
+    me.facingRight = input.mouseX > me.x + GC.PLAYER_WIDTH / 2;
 
-    // Facing
-    p.facingRight = inputState.mouseX > p.x + GC.PLAYER_WIDTH / 2;
-
-    // Jump
-    if (inputState.jump && p.grounded) {
-        p.vy = p.jumpForce || -10;
-        p.grounded = false;
+    if (input.jump && me.grounded) {
+        me.vy = me.jumpForce || GC.JUMP_FORCE;
+        me.grounded = false;
     }
 
-    // Gravity
-    p.vy = (p.vy || 0) + GRAVITY * dt;
-    if (p.vy > MAX_FALL) p.vy = MAX_FALL;
+    me.vy = (me.vy || 0) + GRAVITY * dt;
+    if (me.vy > MAX_FALL) me.vy = MAX_FALL;
 
-    // Move
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.grounded = false;
+    me.x += me.vx * dt;
+    me.y += me.vy * dt;
+    me.grounded = false;
 
-    // Platform collision (local)
     for (const plat of GC.PLATFORMS) {
-        if (rectCol(p.x, p.y, GC.PLAYER_WIDTH, GC.PLAYER_HEIGHT, plat.x, plat.y, plat.w, plat.h)) {
-            const oL = (p.x + GC.PLAYER_WIDTH) - plat.x;
-            const oR = (plat.x + plat.w) - p.x;
-            const oT = (p.y + GC.PLAYER_HEIGHT) - plat.y;
-            const oB = (plat.y + plat.h) - p.y;
+        if (rectCol(me.x, me.y, GC.PLAYER_WIDTH, GC.PLAYER_HEIGHT, plat.x, plat.y, plat.w, plat.h)) {
+            const oL = (me.x + GC.PLAYER_WIDTH) - plat.x;
+            const oR = (plat.x + plat.w) - me.x;
+            const oT = (me.y + GC.PLAYER_HEIGHT) - plat.y;
+            const oB = (plat.y + plat.h) - me.y;
             const min = Math.min(oL, oR, oT, oB);
-            if (min === oT && p.vy >= 0) { p.y = plat.y - GC.PLAYER_HEIGHT; p.vy = 0; p.grounded = true; }
-            else if (min === oB && p.vy < 0) { p.y = plat.y + plat.h; p.vy = 0; }
-            else if (min === oL) { p.x = plat.x - GC.PLAYER_WIDTH; }
-            else if (min === oR) { p.x = plat.x + plat.w; }
+            if (min === oT && me.vy >= 0) { me.y = plat.y - GC.PLAYER_HEIGHT; me.vy = 0; me.grounded = true; }
+            else if (min === oB && me.vy < 0) { me.y = plat.y + plat.h; me.vy = 0; }
+            else if (min === oL) { me.x = plat.x - GC.PLAYER_WIDTH; }
+            else if (min === oR) { me.x = plat.x + plat.w; }
         }
     }
 }
@@ -271,7 +239,6 @@ function predictLocal(dt) {
 function rectCol(x1, y1, w1, h1, x2, y2, w2, h2) {
     return x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2;
 }
-
 function lerp(a, b, t) { return a + (b - a) * t; }
 
 // ================== RENDER ==================
@@ -279,7 +246,6 @@ function render() {
     if (!ctx) return;
     const W = GC.CANVAS_WIDTH, H = GC.CANVAS_HEIGHT;
 
-    // BG
     ctx.fillStyle = '#0a0e1a';
     ctx.fillRect(0, 0, W, H);
 
@@ -298,9 +264,9 @@ function render() {
         if (p.h <= 20) { ctx.fillStyle = '#334155'; ctx.fillRect(p.x + 1, p.y, p.w - 2, 2); }
     }
 
-    // Bullets (from server)
-    for (const b of localBullets) {
-        const owner = serverState?.players?.[b.ownerId];
+    // Bullets
+    for (const b of serverBullets) {
+        const owner = allPlayers[b.ownerId];
         const color = owner ? (owner.playerIndex === 0 ? '#38bdf8' : '#f87171') : '#fbbf24';
         ctx.beginPath(); ctx.arc(b.x, b.y, b.radius + 4, 0, Math.PI * 2);
         ctx.fillStyle = color + '40'; ctx.fill();
@@ -311,7 +277,7 @@ function render() {
     }
 
     // Players
-    if (localPlayer) drawPlayer(localPlayer);
+    if (me) drawPlayer(me);
     if (remotePlayer) drawPlayer(remotePlayer);
 }
 
@@ -321,15 +287,12 @@ function drawPlayer(p) {
     const main = isP1 ? '#1d4ed8' : '#b91c1c';
     const accent = isP1 ? '#38bdf8' : '#f87171';
 
-    // Glow
     ctx.beginPath(); ctx.arc(p.x + PW / 2, p.y + PH / 2, 26, 0, Math.PI * 2);
     ctx.fillStyle = accent + '18'; ctx.fill();
 
-    // Body
     rr(ctx, p.x, p.y, PW, PH, 4); ctx.fillStyle = main; ctx.fill();
     rr(ctx, p.x + 2, p.y + 2, PW - 4, PH / 2 - 2, 3); ctx.fillStyle = accent + '66'; ctx.fill();
 
-    // Eyes
     const ey = p.y + 12, eo = p.facingRight ? 4 : -4, ex = p.x + PW / 2 + eo;
     ctx.fillStyle = '#fff';
     ctx.beginPath(); ctx.arc(ex - 5, ey, 4, 0, Math.PI * 2); ctx.fill();
@@ -339,20 +302,15 @@ function drawPlayer(p) {
     ctx.beginPath(); ctx.arc(ex - 5 + po, ey, 2, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(ex + 5 + po, ey, 2, 0, Math.PI * 2); ctx.fill();
 
-    // Gun
     const gx = p.facingRight ? p.x + PW : p.x, gy = p.y + PH / 2 + 2, gd = p.facingRight ? 1 : -1;
     ctx.fillStyle = '#475569'; ctx.fillRect(gx, gy - 3, 14 * gd, 6);
     ctx.fillStyle = '#64748b'; ctx.fillRect(gx + 10 * gd, gy - 4, 5 * gd, 8);
 
-    // HP bar
     const hw = 32, hr = Math.max(0, p.hp / (p.maxHp || 100));
     ctx.fillStyle = '#1e293b'; ctx.fillRect(p.x - 2, p.y - 10, hw, 5);
     ctx.fillStyle = hr > 0.3 ? accent : '#ef4444'; ctx.fillRect(p.x - 2, p.y - 10, hw * hr, 5);
 
-    // Name tag
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '10px Outfit, sans-serif';
-    ctx.textAlign = 'center';
+    ctx.fillStyle = '#94a3b8'; ctx.font = '10px Outfit, sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(p.name || '', p.x + PW / 2, p.y - 14);
 }
 
@@ -368,60 +326,51 @@ function rr(c, x, y, w, h, r) {
 function setupInput() {
     document.addEventListener('keydown', (e) => {
         switch (e.key.toLowerCase()) {
-            case 'a': case 'arrowleft': inputState.left = true; break;
-            case 'd': case 'arrowright': inputState.right = true; break;
-            case 'w': case 'arrowup': case ' ': inputState.jump = true; e.preventDefault(); break;
+            case 'a': case 'arrowleft': input.left = true; break;
+            case 'd': case 'arrowright': input.right = true; break;
+            case 'w': case 'arrowup': case ' ': input.jump = true; e.preventDefault(); break;
         }
     });
     document.addEventListener('keyup', (e) => {
         switch (e.key.toLowerCase()) {
-            case 'a': case 'arrowleft': inputState.left = false; break;
-            case 'd': case 'arrowright': inputState.right = false; break;
-            case 'w': case 'arrowup': case ' ': inputState.jump = false; break;
+            case 'a': case 'arrowleft': input.left = false; break;
+            case 'd': case 'arrowright': input.right = false; break;
+            case 'w': case 'arrowup': case ' ': input.jump = false; break;
         }
     });
-    canvas.addEventListener('mousedown', (e) => { inputState.shoot = true; updMouse(e); });
-    canvas.addEventListener('mouseup', () => { inputState.shoot = false; });
+    canvas.addEventListener('mousedown', (e) => { input.shoot = true; updMouse(e); });
+    canvas.addEventListener('mouseup', () => { input.shoot = false; });
     canvas.addEventListener('mousemove', (e) => { updMouse(e); });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 function updMouse(e) {
     const r = canvas.getBoundingClientRect();
-    inputState.mouseX = (e.clientX - r.left) * (GC.CANVAS_WIDTH / r.width);
-    inputState.mouseY = (e.clientY - r.top) * (GC.CANVAS_HEIGHT / r.height);
-}
-function sendInput() {
-    if (!socket?.connected) return;
-    const json = JSON.stringify(inputState);
-    if (json !== lastInputJson) {
-        lastInputJson = json;
-        socket.emit('input', inputState);
-    }
+    input.mouseX = (e.clientX - r.left) * (GC.CANVAS_WIDTH / r.width);
+    input.mouseY = (e.clientY - r.top) * (GC.CANVAS_HEIGHT / r.height);
 }
 
 // ================== HUD ==================
 function updateHUD() {
-    if (!serverState) return;
-    const ids = Object.keys(serverState.players);
+    const ids = Object.keys(allPlayers);
     if (ids.length < 2) return;
-    const sorted = ids.sort((a, b) => serverState.players[a].playerIndex - serverState.players[b].playerIndex);
-    const p1 = serverState.players[sorted[0]], p2 = serverState.players[sorted[1]];
+    const sorted = ids.sort((a, b) => allPlayers[a].playerIndex - allPlayers[b].playerIndex);
+    const p1 = allPlayers[sorted[0]], p2 = allPlayers[sorted[1]];
     hudName1.textContent = p1.name; hudName2.textContent = p2.name;
     hudHp1.style.width = `${Math.max(0, (p1.hp / (p1.maxHp || 100)) * 100)}%`;
     hudHp2.style.width = `${Math.max(0, (p2.hp / (p2.maxHp || 100)) * 100)}%`;
-    hudScore1.textContent = localScores[sorted[0]] || 0;
-    hudScore2.textContent = localScores[sorted[1]] || 0;
-    roundText.textContent = `ROUND ${(localScores[sorted[0]] || 0) + (localScores[sorted[1]] || 0) + 1}`;
+    hudScore1.textContent = scores[sorted[0]] || 0;
+    hudScore2.textContent = scores[sorted[1]] || 0;
+    roundTextEl.textContent = `ROUND ${(scores[sorted[0]] || 0) + (scores[sorted[1]] || 0) + 1}`;
 }
 function handleOverlay() {
-    if (localGameState === 'roundEnd') {
-        const wId = Object.keys(serverState.players).find(id => id !== localLoserId);
-        showMsg(`${serverState.players[wId]?.name || 'Player'} WINS THE ROUND!`);
-    } else if (localGameState === 'gameOver') {
-        const ids = Object.keys(localScores);
-        let wId = ids[0]; for (const id of ids) { if ((localScores[id] || 0) > (localScores[wId] || 0)) wId = id; }
-        showMsg(`🏆 ${serverState.players[wId]?.name || 'Player'} WINS! 🏆`);
-    } else if (localGameState === 'playing') { gameOverlay.classList.add('hidden'); }
+    if (gamePhase === 'roundEnd') {
+        const wId = Object.keys(allPlayers).find(id => id !== loserId);
+        showMsg(`${allPlayers[wId]?.name || 'Player'} WINS THE ROUND!`);
+    } else if (gamePhase === 'gameOver') {
+        const ids = Object.keys(scores);
+        let wId = ids[0]; for (const id of ids) { if ((scores[id] || 0) > (scores[wId] || 0)) wId = id; }
+        showMsg(`🏆 ${allPlayers[wId]?.name || 'Player'} WINS! 🏆`);
+    } else if (gamePhase === 'playing') { gameOverlay.classList.add('hidden'); }
 }
 function showMsg(m) { overlayText.textContent = m; gameOverlay.classList.remove('hidden'); }
 

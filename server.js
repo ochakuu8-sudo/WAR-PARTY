@@ -1,121 +1,84 @@
-require('dotenv').config();
+const GameServer = require('./game/GameServer');
+const C = require('./game/constants');
 const express = require('express');
-const cors = require('cors');
-const path = require('path');
-const helmet = require('helmet');
 const http = require('http');
 const { Server } = require('socket.io');
-const GameRoom = require('./game/GameServer');
-const C = require('./game/constants');
+const helmet = require('helmet');
+const path = require('path');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: '*' }
-});
-
-const PORT = process.env.PORT || 3000;
+const io = new Server(server, { cors: { origin: '*' } });
 
 // Middleware
-app.use(helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-            fontSrc: ["'self'", "https://fonts.gstatic.com"],
-            imgSrc: ["'self'", "data:", "https://cdn.discordapp.com"],
-            connectSrc: ["'self'", "wss:", "ws:", "https://discord.com", "https://*.discordsays.com"],
-            frameAncestors: ["'self'", "https://discord.com", "https://*.discordsays.com"],
-        },
-    },
-    frameguard: false,
-    crossOriginEmbedderPolicy: false,
-    crossOriginOpenerPolicy: false,
-}));
-app.use(cors());
+app.use(helmet({ frameguard: false, contentSecurityPolicy: false }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// --- OAuth2 Token Exchange (for Discord SDK) ---
+// Discord OAuth token exchange
 app.post('/api/token', async (req, res) => {
     const { code } = req.body;
-    if (!code) return res.status(400).json({ error: 'No code provided' });
-
+    if (!code) return res.status(400).json({ error: 'Missing code' });
     try {
-        const response = await fetch('https://discord.com/api/oauth2/token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({
-                client_id: process.env.CLIENT_ID,
-                client_secret: process.env.CLIENT_SECRET,
-                grant_type: 'authorization_code',
-                code: code,
-                redirect_uri: `https://${process.env.CLIENT_ID}.discordsays.com/.proxy/api/token`,
-            }),
+        const params = new URLSearchParams({
+            client_id: process.env.CLIENT_ID,
+            client_secret: process.env.CLIENT_SECRET,
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: `https://${process.env.CLIENT_ID}.discordsays.com`,
         });
-        const data = await response.json();
-        if (data.error) throw new Error(data.error_description || data.error);
+        const r = await fetch('https://discord.com/api/oauth2/token', {
+            method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString(),
+        });
+        const data = await r.json();
+        if (data.error) return res.status(400).json(data);
         res.json({ access_token: data.access_token });
-    } catch (error) {
-        console.error('Token exchange error:', error);
-        res.status(500).json({ error: 'Failed to fetch token' });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// --- Game Rooms ---
+// Rooms
 const rooms = {};
 let waitingRoom = null;
 
 io.on('connection', (socket) => {
-    console.log(`Player connected: ${socket.id}`);
+    console.log('Player connected:', socket.id);
 
     socket.on('joinGame', (data) => {
-        const playerName = data.name || 'Player';
-
-        // Find or create a room
-        let room;
-        if (waitingRoom && Object.keys(rooms[waitingRoom]?.players || {}).length < 2) {
-            room = rooms[waitingRoom];
+        let roomId;
+        if (waitingRoom && rooms[waitingRoom] && rooms[waitingRoom].playerCount() < 2) {
+            roomId = waitingRoom;
         } else {
-            const roomId = `room_${Date.now()}`;
-            room = new GameRoom(roomId);
-            rooms[roomId] = room;
+            roomId = 'room_' + Date.now();
+            rooms[roomId] = new GameServer(roomId);
             waitingRoom = roomId;
         }
+        socket.join(roomId);
+        socket.roomId = roomId;
+        const room = rooms[roomId];
+        const pIndex = room.addPlayer(socket.id, data.name || 'Player');
+        socket.emit('joined', { playerId: socket.id, playerIndex: pIndex, constants: C });
 
-        socket.roomId = room.roomId;
-        socket.join(room.roomId);
-        const player = room.addPlayer(socket.id, playerName);
-
-        socket.emit('joined', {
-            playerId: socket.id,
-            playerIndex: player.playerIndex,
-            constants: {
-                CANVAS_WIDTH: C.CANVAS_WIDTH,
-                CANVAS_HEIGHT: C.CANVAS_HEIGHT,
-                PLAYER_WIDTH: C.PLAYER_WIDTH,
-                PLAYER_HEIGHT: C.PLAYER_HEIGHT,
-                PLATFORMS: C.PLATFORMS,
-            }
-        });
-
-        if (room.state === 'playing') {
+        if (room.playerCount() === 2) {
             waitingRoom = null;
-            io.to(room.roomId).emit('gameStart', room.getState());
+            room.start();
+            io.to(roomId).emit('gameStart', room.getState());
             startGameLoop(room);
         } else {
             socket.emit('waiting', { message: 'Waiting for opponent...' });
         }
     });
 
-    socket.on('input', (input) => {
+    // Client sends its own position + shoot intent
+    socket.on('playerUpdate', (data) => {
         const room = rooms[socket.roomId];
-        if (room) room.handleInput(socket.id, input);
+        if (!room) return;
+        room.updatePlayerPosition(socket.id, data);
     });
 
     socket.on('disconnect', () => {
-        console.log(`Player disconnected: ${socket.id}`);
+        console.log('Player disconnected:', socket.id);
         const room = rooms[socket.roomId];
         if (room) {
             room.removePlayer(socket.id);
@@ -129,26 +92,22 @@ io.on('connection', (socket) => {
 });
 
 function startGameLoop(room) {
-    // Physics runs at 60fps for accuracy (matches client prediction)
+    // Server physics at 60fps (bullets only)
     const physicsInterval = setInterval(() => {
         if (!rooms[room.roomId] || Object.keys(room.players).length < 2) {
             clearInterval(physicsInterval);
             clearInterval(sendInterval);
             return;
         }
-        room.update();
+        room.updateBullets();
     }, 1000 / 60);
 
-    // Network sends at 20fps to save bandwidth
+    // Network sends at 60fps (lightweight - just relay positions)
     const sendInterval = setInterval(() => {
-        if (!rooms[room.roomId] || Object.keys(room.players).length < 2) {
-            return;
-        }
+        if (!rooms[room.roomId] || Object.keys(room.players).length < 2) return;
         io.to(room.roomId).emit('gameState', room.getState());
-    }, 1000 / C.TICK_RATE);
+    }, 1000 / 60);
 }
 
-// Start
-server.listen(PORT, () => {
-    console.log(`ROUNDS server running on http://localhost:${PORT}`);
-});
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`ROUNDS server running on http://localhost:${PORT}`));
