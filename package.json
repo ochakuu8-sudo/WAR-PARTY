@@ -6,20 +6,12 @@
   "scripts": {
     "dev": "vite public",
     "build": "vite build public --outDir ../dist --emptyOutDir",
-    "start": "node server.js"
+    "preview": "vite preview --outDir ../dist"
   },
   "keywords": [],
   "author": "ochakuu8-sudo",
   "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1",
-    "helmet": "^8.1.0",
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3"
-  },
+  "type": "module",
   "devDependencies": {
     "vite": "^7.3.1"
   }
