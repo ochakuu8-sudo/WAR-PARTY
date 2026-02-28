@@ -25,21 +25,30 @@ io.on('connection', (socket) => {
 
     socket.on('joinGame', (data) => {
         let roomId;
-        if (waitingRoom && rooms[waitingRoom] && rooms[waitingRoom].playerCount() < 2) {
+        const isCpuGame = data.vsCpu === true;
+
+        if (!isCpuGame && waitingRoom && rooms[waitingRoom] && rooms[waitingRoom].playerCount() < 2) {
             roomId = waitingRoom;
         } else {
-            roomId = 'room_' + Date.now();
+            roomId = (isCpuGame ? 'cpu_' : 'room_') + Date.now();
             rooms[roomId] = new GameServer(roomId);
             rooms[roomId].io = io; // Inject IO reference for event emitting
-            waitingRoom = roomId;
+            rooms[roomId].isCpuGame = isCpuGame;
+            if (!isCpuGame) waitingRoom = roomId;
         }
+
         socket.join(roomId);
         socket.roomId = roomId;
         const room = rooms[roomId];
         const pIndex = room.addPlayer(socket.id, data.name || 'Player');
         socket.emit('joined', { playerId: socket.id, playerIndex: pIndex, constants: C });
 
-        if (room.playerCount() === 2) {
+        if (isCpuGame) {
+            room.addCpuPlayer();
+            room.start();
+            io.to(roomId).emit('gameStart', room.getState());
+            startGameLoop(room);
+        } else if (room.playerCount() === 2) {
             waitingRoom = null;
             room.start();
             io.to(roomId).emit('gameStart', room.getState());
@@ -82,6 +91,7 @@ function startGameLoop(room) {
             clearInterval(sendInterval);
             return;
         }
+        if (room.isCpuGame) room.updateCpuBot();
         room.updateBullets();
     }, 1000 / 60);
 

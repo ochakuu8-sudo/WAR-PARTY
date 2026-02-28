@@ -6,6 +6,7 @@ let playerName = 'Player';
 const lobbyScreen = document.getElementById('lobby');
 const gameScreen = document.getElementById('gameScreen');
 const playBtn = document.getElementById('playBtn');
+const playCpuBtn = document.getElementById('playCpuBtn');
 const nameInput = document.getElementById('nameInput');
 const lobbyStatus = document.getElementById('lobbyStatus');
 const hudName1 = document.getElementById('hudName1');
@@ -40,21 +41,26 @@ const GRAVITY = 0.45;
 const MAX_FALL = 12;
 
 // ================== INIT ==================
-// Handle Play Button Click
-playBtn.addEventListener('click', () => {
+function startGame(isCpu) {
     const val = nameInput.value.trim();
     playerName = val ? val : 'Player' + Math.floor(Math.random() * 1000);
     playBtn.disabled = true;
+    playCpuBtn.disabled = true;
     playBtn.querySelector('span').textContent = 'CONNECTING...';
-    connectSocket();
-});
+    playCpuBtn.querySelector('span').textContent = 'CONNECTING...';
+    connectSocket(isCpu);
+}
+
+// Handle Play Button Click
+playBtn.addEventListener('click', () => startGame(false));
+playCpuBtn.addEventListener('click', () => startGame(true));
 
 // ================== SOCKET ==================
-function connectSocket() {
+function connectSocket(isCpu) {
     socket = io(window.location.origin, { transports: ['websocket'] });
 
     socket.on('connect', () => {
-        socket.emit('joinGame', { name: playerName });
+        socket.emit('joinGame', { name: playerName, vsCpu: isCpu });
         lobbyStatus.textContent = 'Finding opponent...';
     });
     socket.on('joined', (d) => { myId = d.playerId; GC = d.constants; });

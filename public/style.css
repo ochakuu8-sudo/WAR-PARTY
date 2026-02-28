@@ -129,6 +129,17 @@ body {
     cursor: not-allowed;
 }
 
+.cpu-btn {
+    background: linear-gradient(135deg, #10b981, #059669);
+    margin-top: 1rem;
+    padding: 12px 64px;
+    font-size: 1.1rem;
+}
+
+.cpu-btn:hover:not(:disabled) {
+    box-shadow: 0 8px 30px rgba(16, 185, 129, 0.4);
+}
+
 .lobby-status {
     margin-top: 1rem;
     color: var(--text-dim);

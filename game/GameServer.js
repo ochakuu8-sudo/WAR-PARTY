@@ -27,6 +27,82 @@ class GameServer {
         return index;
     }
 
+    addCpuPlayer() {
+        this.isCpuGame = true;
+        this.addPlayer('CPU', 'Bot');
+    }
+
+    updateCpuBot() {
+        if (this.state !== 'playing' || !this.isCpuGame) return;
+        const cpu = this.players['CPU'];
+        if (!cpu || cpu.hp <= 0) return;
+
+        // Find target
+        const targetId = Object.keys(this.players).find(id => id !== 'CPU' && this.players[id].hp > 0);
+        if (!targetId) return;
+        const target = this.players[targetId];
+
+        const dx = target.x - cpu.x;
+        const dy = target.y - cpu.y;
+
+        // Movement
+        if (dx > 30) { cpu.vx = 4; cpu.facingRight = true; }
+        else if (dx < -30) { cpu.vx = -4; cpu.facingRight = false; }
+        else cpu.vx = 0;
+
+        // Physics (Gravity & Collision for Bot)
+        cpu.vy += C.GRAVITY || 0.45;
+        if (cpu.vy > (C.MAX_FALL || 12)) cpu.vy = C.MAX_FALL || 12;
+
+        cpu.x += cpu.vx;
+        cpu.y += cpu.vy;
+
+        let onGround = false;
+        if (cpu.y > 600) { cpu.y = 100; cpu.vy = 0; } // Fallback reset
+
+        for (const plat of C.PLATFORMS) {
+            // Very simple AABB collision for bot floor
+            if (cpu.x < plat.x + plat.w && cpu.x + C.PLAYER_WIDTH > plat.x &&
+                cpu.y + C.PLAYER_HEIGHT >= plat.y && cpu.y + C.PLAYER_HEIGHT <= plat.y + 16 && cpu.vy >= 0) {
+                cpu.y = plat.y - C.PLAYER_HEIGHT;
+                cpu.vy = 0;
+                onGround = true;
+            }
+        }
+
+        // Jump logic: Jump if target is higher or if stuck
+        if (onGround && (dy < -50 || (Math.abs(dx) > 50 && cpu.vx === 0))) {
+            if (Math.random() < 0.1) cpu.vy = -(12); // Jump force
+        }
+
+        // Shooting logic (simulate client emit)
+        if (Date.now() - cpu.lastShot > 600) { // Bot shoots every 600ms
+            cpu.lastShot = Date.now();
+            const cx = cpu.x + C.PLAYER_WIDTH / 2;
+            const cy = cpu.y + C.PLAYER_HEIGHT / 2;
+
+            // Aim at target with some imperfection
+            const tcx = target.x + C.PLAYER_WIDTH / 2 + (Math.random() - 0.5) * 60;
+            const tcy = target.y + C.PLAYER_HEIGHT / 2 + (Math.random() - 0.5) * 60;
+
+            const adx = tcx - cx;
+            const ady = tcy - cy;
+            const dist = Math.sqrt(adx * adx + ady * ady) || 1;
+            const vx = (adx / dist) * C.BULLET_SPEED;
+            const vy = (ady / dist) * C.BULLET_SPEED;
+
+            const b = {
+                id: this.bulletIdCounter++,
+                x: cx, y: cy, vx, vy,
+                radius: C.BULLET_RADIUS,
+                ownerId: 'CPU',
+                life: 120, // 2 seconds at 60Hz
+            };
+            this.bullets.push(b);
+            if (this.io) this.io.to(this.roomId).emit('bulletFired', b);
+        }
+    }
+
     removePlayer(socketId) {
         delete this.players[socketId];
         delete this.scores[socketId];
