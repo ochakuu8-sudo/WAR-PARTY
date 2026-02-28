@@ -262,46 +262,41 @@ function loop() {
         }
     }
 
-    // 3. Low-Latency Entity Interpolation (Overwatch/Source Engine style)
-    // We render slightly in the past to allow smooth interpolation between two known server ticks,
-    // completely eliminating visual jitter while keeping perceived latency near zero.
-    if (remotePlayer && remoteBuffer.length >= 2 && serverTimeOffset !== null) {
-        // Automatically scale RENDER_DELAY to absorb ping jitter. Default 45ms, increasing with ping.
-        const RENDER_DELAY = 45 + Math.min(60, pingMs / 2);
-        const renderTime = performance.now() - serverTimeOffset - RENDER_DELAY;
+    // 3. Responsive Target-Lerping (Zero artificial delay)
+    // Instead of buffering in the past, we immediately target the latest server position 
+    // plus a small extrapolation based on ping, and glide the graphics toward it.
+    if (remotePlayer && remoteBuffer.length > 0) {
+        const latest = remoteBuffer[remoteBuffer.length - 1];
 
-        // Find the two snapshots surrounding renderTime
-        let from = remoteBuffer[0];
-        let to = remoteBuffer[1];
+        // Extrapolate the target position based on network ping (half-trip time)
+        // Cap extrapolation to 100ms to prevent crazy flying on lag spikes
+        const extrapolationSeconds = Math.min(100, pingMs / 2) / 1000;
+        const targetX = latest.x + (latest.vx * extrapolationSeconds);
+        const targetY = latest.y + (latest.vy * extrapolationSeconds);
 
-        for (let i = 0; i < remoteBuffer.length - 1; i++) {
-            if (remoteBuffer[i].t <= renderTime && remoteBuffer[i + 1].t >= renderTime) {
-                from = remoteBuffer[i];
-                to = remoteBuffer[i + 1];
-                break;
+        if (remotePlayer.x === undefined) {
+            remotePlayer.x = targetX;
+            remotePlayer.y = targetY;
+        } else {
+            // How fast we glide to the target. Higher = snappier but more jittery if packets are dropped.
+            // 0.4 is a good balance for hiding the 25ms (40Hz) packet gap.
+            const smoothFactor = Math.min(1, 0.4 * dt);
+
+            // If the discrepancy is massive (e.g. > 200px), just snap to fix desyncs instantly
+            if (Math.abs(remotePlayer.x - targetX) > 200 || Math.abs(remotePlayer.y - targetY) > 200) {
+                remotePlayer.x = targetX;
+                remotePlayer.y = targetY;
+            } else {
+                remotePlayer.x = lerp(remotePlayer.x, targetX, smoothFactor);
+                remotePlayer.y = lerp(remotePlayer.y, targetY, smoothFactor);
             }
         }
 
-        // If renderTime is newer than all snapshots (network delay > RENDER_DELAY), extrapolate slightly
-        if (renderTime > remoteBuffer[remoteBuffer.length - 1].t) {
-            from = remoteBuffer[remoteBuffer.length - 2] || remoteBuffer[0];
-            to = remoteBuffer[remoteBuffer.length - 1];
-        }
-
-        const range = to.t - from.t;
-        // Calculate interpolation factor (t)
-        let t = range > 0 ? (renderTime - from.t) / range : 1;
-
-        // Allow slight extrapolation (up to 20%) if we slightly miss the window to prevent hard snapping
-        t = Math.max(0, Math.min(1.2, t));
-
-        remotePlayer.x = lerp(from.x, to.x, t);
-        remotePlayer.y = lerp(from.y, to.y, t);
-        remotePlayer.hp = to.hp;
-        remotePlayer.maxHp = to.maxHp;
-        remotePlayer.facingRight = to.facingRight;
-        remotePlayer.name = to.name;
-        remotePlayer.playerIndex = to.playerIndex;
+        remotePlayer.hp = latest.hp;
+        remotePlayer.maxHp = latest.maxHp;
+        remotePlayer.facingRight = latest.facingRight;
+        remotePlayer.name = latest.name;
+        remotePlayer.playerIndex = latest.playerIndex;
     }
 
     // 3. Render
