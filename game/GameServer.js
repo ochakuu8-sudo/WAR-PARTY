@@ -45,10 +45,24 @@ class GameServer {
         const dx = target.x - cpu.x;
         const dy = target.y - cpu.y;
 
-        // Movement
-        if (dx > 30) { cpu.vx = 4; cpu.facingRight = true; }
-        else if (dx < -30) { cpu.vx = -4; cpu.facingRight = false; }
-        else cpu.vx = 0;
+        // Randomized Movement State Machine
+        if (!cpu.lastMoveChange || Date.now() - cpu.lastMoveChange > cpu.moveDuration) {
+            cpu.lastMoveChange = Date.now();
+            cpu.moveDuration = 400 + Math.random() * 1100; // Change mind every 0.4s ~ 1.5s
+
+            const r = Math.random();
+            if (r < 0.15) {
+                cpu.targetVx = 0; // 15% chance to stop and hold ground
+            } else if (r < 0.4) {
+                cpu.targetVx = Math.random() < 0.5 ? 4 : -4; // 25% chance to wander randomly (maybe away)
+            } else {
+                cpu.targetVx = dx > 0 ? 4 : -4; // 60% chance to pursue the player
+            }
+        }
+
+        cpu.vx = cpu.targetVx || 0;
+        if (cpu.vx > 0) cpu.facingRight = true;
+        if (cpu.vx < 0) cpu.facingRight = false;
 
         // Physics (Gravity & Collision for Bot)
         cpu.vy += C.GRAVITY || 0.45;
@@ -70,19 +84,30 @@ class GameServer {
             }
         }
 
-        // Jump logic: Jump if target is higher or if stuck
-        if (onGround && (dy < -50 || (Math.abs(dx) > 50 && cpu.vx === 0))) {
-            if (Math.random() < 0.1) cpu.vy = -(12); // Jump force
+        // Jump logic: Evasive hopping + vertical pursuit + unsticking
+        if (onGround) {
+            const shouldJumpEvade = Math.random() < 0.03; // Random bunny hopping
+            const shouldJumpPursue = dy < -30 && Math.abs(dx) < 200 && Math.random() < 0.1; // Try to reach player above
+            const isStuck = Math.abs(dx) > 50 && cpu.vx === 0 && Math.random() < 0.1; // Try to jump if path is blocked
+
+            if (shouldJumpEvade || shouldJumpPursue || isStuck) {
+                cpu.vy = -(12); // Jump force
+            }
         }
 
-        // Shooting logic (simulate client emit)
-        if (Date.now() - cpu.lastShot > 600) { // Bot shoots every 600ms
+        // Shooting logic (simulate client emit with randomized burst delays)
+        if (!cpu.nextShotDelay) cpu.nextShotDelay = 400 + Math.random() * 800; // Initial delay
+
+        if (Date.now() - cpu.lastShot > cpu.nextShotDelay) {
             cpu.lastShot = Date.now();
+            cpu.nextShotDelay = 300 + Math.random() * 900; // Next shot in 0.3s ~ 1.2s
+
             const cx = cpu.x + C.PLAYER_WIDTH / 2;
             const cy = cpu.y + C.PLAYER_HEIGHT / 2;
 
-            // Aim at target with some imperfection
-            const tcx = target.x + C.PLAYER_WIDTH / 2 + (Math.random() - 0.5) * 60;
+            // Aim at target with some imperfection (spread)
+            const spread = 80;
+            const tcx = target.x + C.PLAYER_WIDTH / 2 + (Math.random() - 0.5) * spread;
             const tcy = target.y + C.PLAYER_HEIGHT / 2 + (Math.random() - 0.5) * 60;
 
             const adx = tcx - cx;
