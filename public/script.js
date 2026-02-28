@@ -257,6 +257,7 @@ function loop() {
         if (dtMs > 500) {
             remotePlayer.x = latest.x;
             remotePlayer.y = latest.y;
+        } else {
             // Extrapolate using velocity
             const frames = dtMs / 16.67;
             const damping = Math.max(0, 1 - (dtMs / 200));
@@ -266,10 +267,14 @@ function loop() {
             const targetY = latest.y + (latest.vy * frames * damping);
 
             // Apply Exponential Moving Average (EMA) for visual smoothing
-            // This glides the player towards the target instead of snapping
-            const smoothFactor = 0.3 * dt; // Adjust dt for frame rate independence
-            remotePlayer.x = lerp(remotePlayer.x, targetX, smoothFactor);
-            remotePlayer.y = lerp(remotePlayer.y, targetY, smoothFactor);
+            if (remotePlayer.x === undefined) {
+                remotePlayer.x = targetX;
+                remotePlayer.y = targetY;
+            } else {
+                const smoothFactor = Math.min(1, 0.4 * dt); // Adjust dt for frame rate independence
+                remotePlayer.x = lerp(remotePlayer.x, targetX, smoothFactor);
+                remotePlayer.y = lerp(remotePlayer.y, targetY, smoothFactor);
+            }
         }
 
         remotePlayer.hp = latest.hp;
