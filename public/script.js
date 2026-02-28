@@ -257,16 +257,19 @@ function loop() {
         if (dtMs > 500) {
             remotePlayer.x = latest.x;
             remotePlayer.y = latest.y;
-        } else {
             // Extrapolate using velocity
-            // dtMs / 16.67 gives us how many 60fps frames into the future we are predicting
             const frames = dtMs / 16.67;
-
-            // Project current velocity forward. We apply a slight damping (0.8) to prevent crazy flying on lag spikes
             const damping = Math.max(0, 1 - (dtMs / 200));
 
-            remotePlayer.x = latest.x + (latest.vx * frames * damping);
-            remotePlayer.y = latest.y + (latest.vy * frames * damping);
+            // Calculate the pure extrapolated target position
+            const targetX = latest.x + (latest.vx * frames * damping);
+            const targetY = latest.y + (latest.vy * frames * damping);
+
+            // Apply Exponential Moving Average (EMA) for visual smoothing
+            // This glides the player towards the target instead of snapping
+            const smoothFactor = 0.3 * dt; // Adjust dt for frame rate independence
+            remotePlayer.x = lerp(remotePlayer.x, targetX, smoothFactor);
+            remotePlayer.y = lerp(remotePlayer.y, targetY, smoothFactor);
         }
 
         remotePlayer.hp = latest.hp;
