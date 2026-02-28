@@ -141,6 +141,7 @@ function onServerState(state) {
         remoteBuffer.push({
             t: state.t, // Server time! Immune to network jitter.
             x: sp.x, y: sp.y,
+            vx: sp.vx || 0, vy: sp.vy || 0,
             hp: sp.hp, maxHp: sp.maxHp || 100,
             facingRight: sp.facingRight,
             name: sp.name, playerIndex: sp.playerIndex,
@@ -240,33 +241,39 @@ function loop() {
         }
     }
 
-    // 3. Buffered entity interpolation (Source Engine style)
-    if (remotePlayer && remoteBuffer.length >= 2 && serverTimeOffset !== null) {
-        // Calculate what time it was on the SERVER exactly RENDER_DELAY ms ago
-        const renderTime = performance.now() - serverTimeOffset - RENDER_DELAY;
-        // Find the two snapshots surrounding renderTime
-        let from = remoteBuffer[0], to = remoteBuffer[1];
-        for (let i = 0; i < remoteBuffer.length - 1; i++) {
-            if (remoteBuffer[i].t <= renderTime && remoteBuffer[i + 1].t >= renderTime) {
-                from = remoteBuffer[i];
-                to = remoteBuffer[i + 1];
-                break;
-            }
+    // 3. Dead Reckoning (Extrapolation) to hide physical network latency
+    if (remotePlayer && remoteBuffer.length > 0 && serverTimeOffset !== null) {
+        // EXTRAPOLATION_TIME: How many ms into the future to predict (masks ping)
+        const EXTRAPOLATION_TIME = 60;
+        const renderTime = performance.now() - serverTimeOffset + EXTRAPOLATION_TIME;
+
+        // Find the latest snapshot we have
+        const latest = remoteBuffer[remoteBuffer.length - 1];
+
+        // Time difference between the prediction time and the snapshot time
+        const dtMs = renderTime - latest.t;
+
+        // If the data is incredibly old (e.g. > 500ms lag spike), just snap to it
+        if (dtMs > 500) {
+            remotePlayer.x = latest.x;
+            remotePlayer.y = latest.y;
+        } else {
+            // Extrapolate using velocity
+            // dtMs / 16.67 gives us how many 60fps frames into the future we are predicting
+            const frames = dtMs / 16.67;
+
+            // Project current velocity forward. We apply a slight damping (0.8) to prevent crazy flying on lag spikes
+            const damping = Math.max(0, 1 - (dtMs / 200));
+
+            remotePlayer.x = latest.x + (latest.vx * frames * damping);
+            remotePlayer.y = latest.y + (latest.vy * frames * damping);
         }
-        // If renderTime is past all snapshots, use the latest
-        if (renderTime > remoteBuffer[remoteBuffer.length - 1].t) {
-            from = remoteBuffer[remoteBuffer.length - 2] || remoteBuffer[0];
-            to = remoteBuffer[remoteBuffer.length - 1];
-        }
-        const range = to.t - from.t;
-        const t = range > 0 ? Math.max(0, Math.min(1, (renderTime - from.t) / range)) : 1;
-        remotePlayer.x = lerp(from.x, to.x, t);
-        remotePlayer.y = lerp(from.y, to.y, t);
-        remotePlayer.hp = to.hp;
-        remotePlayer.maxHp = to.maxHp;
-        remotePlayer.facingRight = to.facingRight;
-        remotePlayer.name = to.name;
-        remotePlayer.playerIndex = to.playerIndex;
+
+        remotePlayer.hp = latest.hp;
+        remotePlayer.maxHp = latest.maxHp;
+        remotePlayer.facingRight = latest.facingRight;
+        remotePlayer.name = latest.name;
+        remotePlayer.playerIndex = latest.playerIndex;
     }
 
     // 3. Render
