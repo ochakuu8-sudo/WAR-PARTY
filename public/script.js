@@ -247,6 +247,7 @@ function loop() {
                 shoot: input.shoot,
                 mouseX: input.mouseX,
                 mouseY: input.mouseY,
+                ping: pingMs,
             });
         }
     }

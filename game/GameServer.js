@@ -56,14 +56,25 @@ class GameServer {
             const dx = data.mouseX - cx;
             const dy = data.mouseY - cy;
             const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const vx = (dx / dist) * C.BULLET_SPEED;
+            const vy = (dy / dist) * C.BULLET_SPEED;
+
+            // Apply Projectile Lag Compensation (Fast-Forward)
+            // The client shot at a target they saw in the "extrapolated present" based on their ping.
+            // By fast-forwarding the bullet on the server by half their ping, the server's bullet 
+            // exactly matches the bullet the client is seeing on their screen.
+            const headStartMs = Math.min(200, (data.ping || 0) / 2); // Cap at 200ms
+            const headStartFrames = headStartMs / 16.67; // 60Hz physics frames
+
             const b = {
                 id: this.bulletIdCounter++,
-                x: cx, y: cy,
-                vx: (dx / dist) * C.BULLET_SPEED,
-                vy: (dy / dist) * C.BULLET_SPEED,
+                x: cx + (vx * headStartFrames),
+                y: cy + (vy * headStartFrames),
+                vx: vx,
+                vy: vy,
                 radius: C.BULLET_RADIUS,
                 ownerId: socketId,
-                life: 120,
+                life: 120 - headStartFrames,
             };
             this.bullets.push(b);
 
