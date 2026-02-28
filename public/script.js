@@ -249,47 +249,45 @@ function loop() {
         }
     }
 
-    // 3. Dead Reckoning (Extrapolation) to hide physical network latency
-    if (remotePlayer && remoteBuffer.length > 0 && serverTimeOffset !== null) {
-        // EXTRAPOLATION_TIME: How many ms into the future to predict (masks ping)
-        const EXTRAPOLATION_TIME = 60;
-        const renderTime = performance.now() - serverTimeOffset + EXTRAPOLATION_TIME;
+    // 3. Low-Latency Entity Interpolation (Overwatch/Source Engine style)
+    // We render slightly in the past to allow smooth interpolation between two known server ticks,
+    // completely eliminating visual jitter while keeping perceived latency near zero.
+    if (remotePlayer && remoteBuffer.length >= 2 && serverTimeOffset !== null) {
+        const RENDER_DELAY = 45; // Just enough to catch the next 40Hz tick (25ms) + some network jitter allowance
+        const renderTime = performance.now() - serverTimeOffset - RENDER_DELAY;
 
-        // Find the latest snapshot we have
-        const latest = remoteBuffer[remoteBuffer.length - 1];
+        // Find the two snapshots surrounding renderTime
+        let from = remoteBuffer[0];
+        let to = remoteBuffer[1];
 
-        // Time difference between the prediction time and the snapshot time
-        const dtMs = renderTime - latest.t;
-
-        // If the data is incredibly old (e.g. > 500ms lag spike), just snap to it
-        if (dtMs > 500) {
-            remotePlayer.x = latest.x;
-            remotePlayer.y = latest.y;
-        } else {
-            // Extrapolate using velocity
-            const frames = dtMs / 16.67;
-            const damping = Math.max(0, 1 - (dtMs / 200));
-
-            // Calculate the pure extrapolated target position
-            const targetX = latest.x + (latest.vx * frames * damping);
-            const targetY = latest.y + (latest.vy * frames * damping);
-
-            // Apply Exponential Moving Average (EMA) for visual smoothing
-            if (remotePlayer.x === undefined) {
-                remotePlayer.x = targetX;
-                remotePlayer.y = targetY;
-            } else {
-                const smoothFactor = Math.min(1, 0.4 * dt); // Adjust dt for frame rate independence
-                remotePlayer.x = lerp(remotePlayer.x, targetX, smoothFactor);
-                remotePlayer.y = lerp(remotePlayer.y, targetY, smoothFactor);
+        for (let i = 0; i < remoteBuffer.length - 1; i++) {
+            if (remoteBuffer[i].t <= renderTime && remoteBuffer[i + 1].t >= renderTime) {
+                from = remoteBuffer[i];
+                to = remoteBuffer[i + 1];
+                break;
             }
         }
 
-        remotePlayer.hp = latest.hp;
-        remotePlayer.maxHp = latest.maxHp;
-        remotePlayer.facingRight = latest.facingRight;
-        remotePlayer.name = latest.name;
-        remotePlayer.playerIndex = latest.playerIndex;
+        // If renderTime is newer than all snapshots (network delay > RENDER_DELAY), extrapolate slightly
+        if (renderTime > remoteBuffer[remoteBuffer.length - 1].t) {
+            from = remoteBuffer[remoteBuffer.length - 2] || remoteBuffer[0];
+            to = remoteBuffer[remoteBuffer.length - 1];
+        }
+
+        const range = to.t - from.t;
+        // Calculate interpolation factor (t)
+        let t = range > 0 ? (renderTime - from.t) / range : 1;
+
+        // Allow slight extrapolation (up to 20%) if we slightly miss the window to prevent hard snapping
+        t = Math.max(0, Math.min(1.2, t));
+
+        remotePlayer.x = lerp(from.x, to.x, t);
+        remotePlayer.y = lerp(from.y, to.y, t);
+        remotePlayer.hp = to.hp;
+        remotePlayer.maxHp = to.maxHp;
+        remotePlayer.facingRight = to.facingRight;
+        remotePlayer.name = to.name;
+        remotePlayer.playerIndex = to.playerIndex;
     }
 
     // 3. Render
