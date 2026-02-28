@@ -78,6 +78,10 @@ io.on('connection', (socket) => {
         room.updatePlayerPosition(socket.id, data);
     });
 
+    socket.on('ping', (cb) => {
+        if (typeof cb === 'function') cb();
+    });
+
     socket.on('disconnect', () => {
         console.log('Player disconnected:', socket.id);
         const room = rooms[socket.roomId];

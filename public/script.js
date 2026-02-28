@@ -112,19 +112,32 @@ function connectSocket() {
             if (animFrameId) cancelAnimationFrame(animFrameId);
         }, 2000);
     });
+
+    // Ping Tracking
+    setInterval(() => {
+        if (socket && socket.connected) {
+            const start = Date.now();
+            socket.emit('ping', () => { pingMs = Date.now() - start; });
+        }
+    }, 1000);
 }
 
 // ================== SERVER STATE (just relay) ==================
 let serverTimeOffset = null;
+let pingMs = 0;
 
 function onServerState(state) {
     if (!state.t) return; // Wait for server to update
 
-    // Smoothly track the difference between local time and server time
+    // We want the MINIMUM offset, as it represents the fastest packet delivery (true clock difference + min half-ping)
+    // If we simply average it, varying ping (jitter) will cause our clock to speed up and slow down, causing stutter!
     const localNow = performance.now();
     const currentOffset = localNow - state.t;
-    if (serverTimeOffset === null) serverTimeOffset = currentOffset;
-    else serverTimeOffset = serverTimeOffset * 0.9 + currentOffset * 0.1;
+    if (serverTimeOffset === null || currentOffset < serverTimeOffset) {
+        serverTimeOffset = currentOffset; // Lock onto the fastest packet
+    } else {
+        serverTimeOffset += 0.05; // Slowly drift up (1ms every 20 frames) to handle physical clock drift
+    }
 
     allPlayers = state.players;
     scores = state.scores;
@@ -253,7 +266,8 @@ function loop() {
     // We render slightly in the past to allow smooth interpolation between two known server ticks,
     // completely eliminating visual jitter while keeping perceived latency near zero.
     if (remotePlayer && remoteBuffer.length >= 2 && serverTimeOffset !== null) {
-        const RENDER_DELAY = 45; // Just enough to catch the next 40Hz tick (25ms) + some network jitter allowance
+        // Automatically scale RENDER_DELAY to absorb ping jitter. Default 45ms, increasing with ping.
+        const RENDER_DELAY = 45 + Math.min(60, pingMs / 2);
         const renderTime = performance.now() - serverTimeOffset - RENDER_DELAY;
 
         // Find the two snapshots surrounding renderTime
@@ -372,6 +386,13 @@ function render() {
     // Players
     if (me) drawPlayer(me);
     if (remotePlayer) drawPlayer(remotePlayer);
+
+    // Ping UI
+    ctx.fillStyle = pingMs > 100 ? '#ef4444' : pingMs > 50 ? '#fbbf24' : '#22c55e';
+    ctx.font = 'bold 14px "M PLUS Rounded 1c", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`Ping: ${pingMs}ms`, W - 10, 25);
+    ctx.textAlign = 'left';
 }
 
 function drawPlayer(p) {
