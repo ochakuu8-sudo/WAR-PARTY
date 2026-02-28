@@ -52,6 +52,7 @@ io.on('connection', (socket) => {
         } else {
             roomId = 'room_' + Date.now();
             rooms[roomId] = new GameServer(roomId);
+            rooms[roomId].io = io; // Inject IO reference for event emitting
             waitingRoom = roomId;
         }
         socket.join(roomId);

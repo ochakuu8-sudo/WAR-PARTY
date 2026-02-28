@@ -56,7 +56,7 @@ class GameServer {
             const dx = data.mouseX - cx;
             const dy = data.mouseY - cy;
             const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-            this.bullets.push({
+            const b = {
                 id: this.bulletIdCounter++,
                 x: cx, y: cy,
                 vx: (dx / dist) * C.BULLET_SPEED,
@@ -64,7 +64,13 @@ class GameServer {
                 radius: C.BULLET_RADIUS,
                 ownerId: socketId,
                 life: 120,
-            });
+            };
+            this.bullets.push(b);
+
+            // Emit bullet creation event to clients so they can simulate it
+            if (this.io) {
+                this.io.to(this.roomId).emit('bulletFired', b);
+            }
         }
     }
 
@@ -140,7 +146,7 @@ class GameServer {
         return {
             t: Date.now(),
             players: this.players,
-            bullets: this.bullets,
+            // bullets: this.bullets, // Removed: clients now simulate bullets based on bulletFired events
             scores: this.scores,
             state: this.state,
             loserId: this.loserId,

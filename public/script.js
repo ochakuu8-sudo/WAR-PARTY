@@ -94,6 +94,14 @@ function connectSocket() {
         initGame(state);
     });
     socket.on('gameState', onServerState);
+
+    // Server says a bullet was fired, we simulate it from now on
+    socket.on('bulletFired', (b) => {
+        // If we fired it ourselves, we already have it in localBullets from client prediction
+        if (b.ownerId === myId) return;
+        localBullets.push(b);
+    });
+
     socket.on('opponentLeft', () => {
         showMsg('OPPONENT LEFT');
         setTimeout(() => {
@@ -122,7 +130,7 @@ function onServerState(state) {
     scores = state.scores;
     gamePhase = state.state;
     loserId = state.loserId;
-    serverBullets = state.bullets || [];
+    // serverBullets = state.bullets || []; // removed, we simulate locally now
 
     // Update my HP from server (damage is server-authoritative)
     if (me && allPlayers[myId]) {
@@ -351,11 +359,8 @@ function render() {
         if (p.h <= 20) { ctx.fillStyle = '#334155'; ctx.fillRect(p.x + 1, p.y, p.w - 2, 2); }
     }
 
-    // Bullets: show local bullets (own, instant) + server bullets (opponent's)
-    // Filter server bullets to only show opponent's (avoid duplicate own bullets)
-    const opponentBullets = serverBullets.filter(b => b.ownerId !== myId);
-    const allBullets = [...localBullets, ...opponentBullets];
-    for (const b of allBullets) {
+    // Bullets: all bullets are now simulated locally in localBullets
+    for (const b of localBullets) {
         const owner = allPlayers[b.ownerId];
         const color = owner ? (owner.playerIndex === 0 ? '#38bdf8' : '#f87171') : '#fbbf24';
         ctx.beginPath(); ctx.arc(b.x, b.y, b.radius + 4, 0, Math.PI * 2);
