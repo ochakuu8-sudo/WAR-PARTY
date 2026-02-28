@@ -1,16 +1,13 @@
-import { DiscordSDK } from "@discord/embedded-app-sdk";
 import { io } from "socket.io-client";
 
-const CLIENT_ID = '1476881728755994656';
-let discordSdk, discordAccessToken = null, playerName = 'Player';
+let playerName = 'Player';
 
 // UI
 const lobbyScreen = document.getElementById('lobby');
 const gameScreen = document.getElementById('gameScreen');
 const playBtn = document.getElementById('playBtn');
+const nameInput = document.getElementById('nameInput');
 const lobbyStatus = document.getElementById('lobbyStatus');
-const playerNameEl = document.getElementById('playerName');
-const avatarEl = document.getElementById('avatar');
 const hudName1 = document.getElementById('hudName1');
 const hudName2 = document.getElementById('hudName2');
 const hudHp1 = document.getElementById('hudHp1');
@@ -32,9 +29,8 @@ let me = null;
 // Remote player (buffered entity interpolation - Source Engine style)
 let remotePlayer = null;
 let remoteBuffer = []; // [{t, x, y, hp, maxHp, facingRight, name, playerIndex}, ...]
-const RENDER_DELAY = 40; // ms - render remote player 40ms in the past for smoothness
+
 // Server data
-let serverBullets = [];
 let scores = {};
 let gamePhase = 'waiting';
 let loserId = null;
@@ -43,44 +39,19 @@ let allPlayers = {};
 const GRAVITY = 0.45;
 const MAX_FALL = 12;
 
-// ================== DISCORD ==================
-async function initDiscord() {
-    try {
-        discordSdk = new DiscordSDK(CLIENT_ID);
-        await discordSdk.ready();
-        const { code } = await discordSdk.commands.authorize({
-            client_id: CLIENT_ID, response_type: 'code', state: '', prompt: 'none',
-            scope: ['identify', 'rpc.activities.write']
-        });
-        const res = await fetch('/.proxy/api/token', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code }),
-        });
-        const d = await res.json();
-        if (d.error) throw new Error(d.error);
-        discordAccessToken = d.access_token;
-        await discordSdk.commands.authenticate({ access_token: discordAccessToken });
-        const u = await (await fetch('https://discord.com/api/users/@me', {
-            headers: { Authorization: `Bearer ${discordAccessToken}` }
-        })).json();
-        playerName = u.global_name || u.username;
-        playerNameEl.textContent = playerName;
-        if (u.avatar) avatarEl.style.background = `url(https://cdn.discordapp.com/avatars/${u.id}/${u.avatar}.png) center/cover`;
-    } catch (e) {
-        console.warn('Discord skipped:', e.message);
-        playerName = 'TestPlayer';
-        playerNameEl.textContent = playerName;
-    }
-    playBtn.disabled = false;
-    playBtn.querySelector('span').textContent = 'PLAY';
-}
+// ================== INIT ==================
+// Handle Play Button Click
+playBtn.addEventListener('click', () => {
+    const val = nameInput.value.trim();
+    playerName = val ? val : 'Player' + Math.floor(Math.random() * 1000);
+    playBtn.disabled = true;
+    playBtn.querySelector('span').textContent = 'CONNECTING...';
+    connectSocket();
+});
 
 // ================== SOCKET ==================
 function connectSocket() {
-    const isDiscord = window.location.hostname.includes('discordsays.com');
-    const url = isDiscord ? `wss://${window.location.hostname}` : window.location.origin;
-    const path = isDiscord ? '/.proxy/socket.io/' : '/socket.io/';
-    socket = io(url, { path, transports: ['websocket'] });
+    socket = io(window.location.origin, { transports: ['websocket'] });
 
     socket.on('connect', () => {
         socket.emit('joinGame', { name: playerName });
@@ -484,10 +455,4 @@ function handleOverlay() {
 }
 function showMsg(m) { overlayText.textContent = m; gameOverlay.classList.remove('hidden'); }
 
-// ================== START ==================
-playBtn.addEventListener('click', () => {
-    playBtn.disabled = true;
-    playBtn.querySelector('span').textContent = 'SEARCHING...';
-    connectSocket();
-});
-initDiscord();
+

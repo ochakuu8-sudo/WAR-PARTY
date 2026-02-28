@@ -16,28 +16,6 @@ app.use(helmet({ frameguard: false, contentSecurityPolicy: false }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Discord OAuth token exchange
-app.post('/api/token', async (req, res) => {
-    const { code } = req.body;
-    if (!code) return res.status(400).json({ error: 'Missing code' });
-    try {
-        const params = new URLSearchParams({
-            client_id: process.env.CLIENT_ID,
-            client_secret: process.env.CLIENT_SECRET,
-            grant_type: 'authorization_code',
-            code,
-            redirect_uri: `https://${process.env.CLIENT_ID}.discordsays.com`,
-        });
-        const r = await fetch('https://discord.com/api/oauth2/token', {
-            method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: params.toString(),
-        });
-        const data = await r.json();
-        if (data.error) return res.status(400).json(data);
-        res.json({ access_token: data.access_token });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 // Rooms
 const rooms = {};
 let waitingRoom = null;
